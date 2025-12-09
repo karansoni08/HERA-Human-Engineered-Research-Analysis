@@ -1,0 +1,8 @@
+pandas
+faker
+tqdm
+openpyxl
+
+spacy
+presidio-analyzer
+presidio-anonymizer
