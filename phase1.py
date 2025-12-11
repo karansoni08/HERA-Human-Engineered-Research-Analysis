@@ -19,7 +19,7 @@ from faker import Faker
 
 # ----------------- CONFIG -----------------
 
-NUM_EMPLOYEES = 100
+NUM_EMPLOYEES = 10
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_RAW_DIR = PROJECT_ROOT / "data" / "raw"
