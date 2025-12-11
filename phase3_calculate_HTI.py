@@ -54,34 +54,141 @@ SELECTED_COLUMNS = [
 def build_prompt(record: dict) -> str:
     """
     Build the HTI scoring prompt for a single employee record.
+    Uses explicit formulas (BRS, CRS, IIS, HTI) and strict JSON output.
     """
     prompt = f"""
-You are an expert insider-threat analyst. 
-Your goal is to calculate a HUMAN THREAT INDEX (HTI) for each employee.
+You are an AI model operating inside an air-gapped insider-threat analysis pipeline.
+You MUST NOT hallucinate, invent data, or use any information outside the employee record provided.
+If any numeric field required for a formula is missing or null, treat that metric as "INSUFFICIENT_DATA"
+and DO NOT guess values.
 
-HTI Scale:
-0-25 = Low Risk
-26-60 = Medium Risk
-61-100 = High Risk
+You must compute a HUMAN THREAT INDEX (HTI) using the following definitions and formulas.
 
-Using the employee’s masked behavioral data below, identify:
-1. Behavioral anomalies
-2. Risk factors
-3. Weighted scoring logic
-4. Final HTI score (0–100)
-5. Explanation in 4–5 bullet points
+------------------------------------------------
+INPUT EMPLOYEE RECORD (JSON)
+------------------------------------------------
+You will receive an employee record like this (fields may vary):
 
+{json.dumps(record, indent=2)}
+
+Only use the fields that actually exist. If a field is missing or null, treat it as missing.
+
+------------------------------------------------
+SCORING MODEL (MANDATORY)
+------------------------------------------------
+
+1) Behavioral Risk Score (BRS)
+--------------------------------
+Use anomaly / activity indicators. Map from your available columns as follows
+(only if they exist; otherwise mark BRS as INSUFFICIENT_DATA):
+
+- login_failures_30d
+- privilege_escalations_30d
+- suspicious_file_access_30d
+- email_anomalies_30d
+
+Formula:
+
+BRS =
+  (login_failures_30d       * 0.15) +
+  (privilege_escalations_30d * 0.25) +
+  (suspicious_file_access_30d * 0.35) +
+  (email_anomalies_30d       * 0.25)
+
+If BRS > 100, cap it at 100.
+
+If ANY of the above fields needed for the formula is missing → BRS = "INSUFFICIENT_DATA".
+
+If your dataset uses different but clearly equivalent features
+(e.g. failed_logins_7d, usb_activity_score, privilege_change_30d),
+you may adapt them logically, but NEVER invent values.
+
+2) Compliance Risk Score (CRS)
+--------------------------------
+Uses security training and historical incidents where available:
+
+Required fields (if present):
+- security_training_score (0–100; higher is better)
+- previous_incidents (count of prior security incidents)
+
+Formula:
+
+CRS =
+  (100 - security_training_score) * 0.6
+  + (previous_incidents * 10) * 0.4
+
+Cap CRS at 100.
+
+If a required field is missing → CRS = "INSUFFICIENT_DATA".
+
+3) Insider Intent Score (IIS)
+--------------------------------
+Uses psychometric and tenure data (if available):
+
+Required fields:
+- psychometric_risk_score (0–100; higher = riskier)
+- tenure_years (years in organization, may be float)
+
+Formula:
+
+IIS =
+  (psychometric_risk_score * 0.7)
+  + (max(0, (5 - tenure_years)) * 6)
+
+Cap IIS at 100.
+
+If a required field is missing → IIS = "INSUFFICIENT_DATA".
+
+4) HUMAN THREAT INDEX (HTI)
+--------------------------------
+If ANY of BRS, CRS, or IIS is "INSUFFICIENT_DATA" → HTI = "INSUFFICIENT_DATA".
+
+Otherwise:
+
+HTI = (BRS * 0.4) + (CRS * 0.3) + (IIS * 0.3)
+
+Round HTI to 2 decimal places.
+
+5) RISK LEVEL MAPPING
+--------------------------------
+Based on numeric HTI (0–100):
+
+- HTI in [0, 45]    → "Low"
+- HTI in [46, 80]   → "Medium"
+- HTI in [81, 100]  → "High"
+
+If HTI = "INSUFFICIENT_DATA" → risk_level = "Unknown".
+
+------------------------------------------------
+OUTPUT FORMAT (STRICT JSON ONLY)
+------------------------------------------------
 Return JSON in EXACT format:
+
 {{
-  "hti_score": <number>,
-  "risk_level": "<Low|Medium|High>",
-  "explanation": "<short explanation>"
+  "hti_score": <number or "INSUFFICIENT_DATA">,
+  "risk_level": "<Low|Medium|High|Unknown>",
+  "explanation": "<short explanation referencing BRS, CRS, IIS and key drivers>"
 }}
 
-Only output the JSON. Do not include any extra text.
+Rules:
+- Only output the JSON object (no commentary, no markdown).
+- Do NOT invent or guess missing numeric values.
+- If you had to mark anything as INSUFFICIENT_DATA, mention that in the explanation.
+- The explanation must be concise (3–5 short sentences).
 
-Employee Data:
-{json.dumps(record, indent=2)}
+------------------------------------------------
+GENERATION & HALLUCINATION CONTROL
+------------------------------------------------
+You are running with:
+- temperature = 0.0
+- top_p = 0.1
+- top_k = 20
+- deterministic seed
+
+This means you MUST behave deterministically and avoid any creative or speculative output.
+Just apply the formulas above to the provided employee record.
+
+Now, compute the HTI for the given Employee Data and output ONLY the JSON.
 """
     return prompt
 
@@ -98,10 +205,22 @@ def call_llm(prompt: str) -> dict:
     payload = {
         "model": OLLAMA_MODEL,
         "messages": [
-            {"role": "system", "content": "You are an advanced threat-modeling assistant."},
+            {
+                "role": "system",
+                "content": (
+                    "You are an advanced threat-modeling assistant inside an air-gapped environment. "
+                    "You must follow the user's instructions exactly, avoid hallucinations, and output ONLY strict JSON."
+                )
+            },
             {"role": "user", "content": prompt}
         ],
         "stream": False,
+        "options": {
+            "temperature": 0.0,
+            "top_p": 0.1,
+            "top_k": 20,
+            "seed": 42
+        }
     }
 
     try:
