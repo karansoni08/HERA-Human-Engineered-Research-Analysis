@@ -7,3 +7,6 @@ spacy
 presidio-analyzer
 presidio-anonymizer
 requests
+reportlab
+
+
